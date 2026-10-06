@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-unofficial",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unofficial, community-built WhatsApp integration: read your own WhatsApp chats from Claude Code via a local linked device. Read-only by default; sending is opt-in. Not affiliated with, endorsed by, or sponsored by WhatsApp or Meta.",
   "author": {
     "name": "Beg1nner4ever"
@@ -39,5 +39,22 @@
         "WHATSAPP_UNOFFICIAL_ALLOW_SEND": "${user_config.allow_send}"
       }
     }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch",
+            "args": [
+              "--prefetch"
+            ],
+            "async": true,
+            "timeout": 600
+          }
+        ]
+      }
+    ]
   }
 }

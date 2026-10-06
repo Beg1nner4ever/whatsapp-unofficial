@@ -12,7 +12,7 @@
       "name": "whatsapp-unofficial",
       "source": "./plugin",
       "description": "Unofficial WhatsApp integration: read your own chats via a local linked device. Read-only by default; sending is opt-in. Not affiliated with WhatsApp or Meta.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "productivity"
     }
   ]

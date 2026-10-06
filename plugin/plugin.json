@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "whatsapp-unofficial",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unofficial, community-built WhatsApp integration: read your own WhatsApp chats from your AI assistant via a local linked device. Read-only by default; sending is opt-in. Not affiliated with, endorsed by, or sponsored by WhatsApp or Meta.",
   "homepage": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
   "repository": "https://github.com/Beg1nner4ever/whatsapp-unofficial",

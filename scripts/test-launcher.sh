@@ -218,6 +218,26 @@ check "concurrent: all 8 runs succeed with correct output" test "$concurrent_ok"
 check "concurrent: exactly one cached file, no temp files" test "$(find "$data" -type f | wc -l | tr -d ' ')" -eq 1
 check "concurrent: cached binary verified" test "$(sha256 "$data/bin/$version/$asset")" = "$good_hash"
 
+# --- 8. prefetch and stale partial downloads ----------------------------------
+root=$(new_plugin prefetch)
+printf '%s  %s\n' "$good_hash" "$asset" >"$root/checksums.txt"
+data="$work/prefetch/data"
+mkdir -p "$data/bin/$version"
+# Partial downloads from killed runs: one stale, one fresh (a concurrent run).
+printf 'partial' >"$data/bin/$version/.$asset.STALE1"
+touch -t 202001010000 "$data/bin/$version/.$asset.STALE1"
+printf 'partial' >"$data/bin/$version/.$asset.FRESH1"
+run_launcher "$root" "$data" --prefetch
+check "prefetch: exit 0" test "$rc" -eq 0
+check "prefetch: binary not executed (stdout empty)" test -z "$out"
+check "prefetch: binary cached and verified" test "$(sha256 "$data/bin/$version/$asset")" = "$good_hash"
+check "prefetch: stale partial download removed" test ! -e "$data/bin/$version/.$asset.STALE1"
+check "prefetch: fresh partial of a concurrent run kept" test -e "$data/bin/$version/.$asset.FRESH1"
+run_launcher "$root" "$data" --prefetch
+check "prefetch: cached run exits 0 silently" test "$rc" -eq 0 -a -z "$out" -a -z "$err"
+run_launcher "$root" "$data" serve
+check "prefetch: normal run uses prefetched binary" test "$rc" -eq 0 -a "$out" = "$(printf 'FAKE-BINARY\n[serve]')"
+
 echo
 echo "launcher tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

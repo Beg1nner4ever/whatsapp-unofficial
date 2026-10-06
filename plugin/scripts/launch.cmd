@@ -5,6 +5,7 @@ rem ..\checksums.txt) and prints only its path; this wrapper then runs it with
 rem all arguments. Diagnostics go to stderr; stdout belongs to the MCP server.
 setlocal EnableExtensions DisableDelayedExpansion
 
+if defined WHATSAPP_UNOFFICIAL_BIN if "%~1"=="--prefetch" exit /b 0
 if defined WHATSAPP_UNOFFICIAL_BIN (
   "%WHATSAPP_UNOFFICIAL_BIN%" %*
   exit /b %ERRORLEVEL%
@@ -20,6 +21,9 @@ if not defined WAU_EXE (
   echo whatsapp-unofficial launcher: error: could not prepare the binary, see messages above 1>&2
   exit /b 1
 )
+
+rem "launch --prefetch": download and verify only (used by the SessionStart hook).
+if "%~1"=="--prefetch" exit /b 0
 
 "%WAU_EXE%" %*
 exit /b %ERRORLEVEL%

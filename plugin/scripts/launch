@@ -13,6 +13,10 @@
 #   WHATSAPP_UNOFFICIAL_DOWNLOAD_BASE  override release download base URL
 #                                      (https:// only; file:// for tests)
 #   CLAUDE_PLUGIN_DATA / PLUGIN_DATA   cache root (else ~/.cache/whatsapp-unofficial)
+#
+# "launch --prefetch" only downloads and verifies the binary, then exits. The
+# plugin runs it from a SessionStart hook so a slow first download is not lost
+# when the MCP server start times out.
 
 set -eu
 
@@ -29,7 +33,14 @@ note() {
 	printf '%s launcher: %s\n' "$NAME" "$*" >&2
 }
 
+prefetch=0
+if [ "${1:-}" = "--prefetch" ]; then
+	prefetch=1
+	shift
+fi
+
 if [ -n "${WHATSAPP_UNOFFICIAL_BIN:-}" ]; then
+	[ "$prefetch" = 1 ] && exit 0
 	exec "$WHATSAPP_UNOFFICIAL_BIN" "$@"
 fi
 
@@ -104,6 +115,7 @@ target="$cache_dir/$asset"
 # Re-verify a cached binary on every start; a damaged file is replaced.
 if [ -f "$target" ]; then
 	if [ "$(sha256_of "$target")" = "$expected" ] && [ -x "$target" ]; then
+		[ "$prefetch" = 1 ] && exit 0
 		exec "$target" "$@"
 	fi
 	note "cached binary failed verification; downloading again"
@@ -121,6 +133,10 @@ url="$base/$asset"
 
 umask 077
 mkdir -p "$cache_dir" || die "cannot create cache directory $cache_dir"
+
+# Remove partial downloads left by runs that were killed (SIGKILL cannot be
+# trapped). Only stale ones: a concurrent run may be downloading right now.
+find "$cache_dir" -maxdepth 1 -type f -name ".$asset.*" -mmin +10 -exec rm -f {} + 2>/dev/null || true
 
 # Each run downloads to its own temp file, so concurrent first runs never
 # share a partial file; the final rename is atomic and both sides install
@@ -156,4 +172,5 @@ fi
 chmod 0700 "$tmp" || die "cannot mark $tmp executable"
 mv -f "$tmp" "$target" || die "cannot move binary into $target"
 trap - EXIT INT HUP TERM
+[ "$prefetch" = 1 ] && exit 0
 exec "$target" "$@"
