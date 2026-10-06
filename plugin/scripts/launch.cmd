@@ -11,6 +11,9 @@ if defined WHATSAPP_UNOFFICIAL_BIN (
 )
 
 set "WAU_EXE="
+rem Windows PowerShell must not inherit a PowerShell 7 module path (it would
+rem try to load incompatible modules); empty means "use the defaults".
+set "PSModulePath="
 for /f "usebackq delims=" %%P in (`powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0launch.ps1"`) do set "WAU_EXE=%%P"
 
 if not defined WAU_EXE (

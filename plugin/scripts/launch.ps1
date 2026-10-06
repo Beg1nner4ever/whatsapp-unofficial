@@ -17,9 +17,20 @@ function Note([string]$Message) {
     [Console]::Error.WriteLine("$Name launcher: $Message")
 }
 
+# .NET hashing instead of Get-FileHash: the Utility module may fail to load
+# when Windows PowerShell inherits a PowerShell 7 PSModulePath.
 function Get-Sha256([string]$Path) {
-    (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
 }
+
+$tmp = $null
 
 try {
     $pluginRoot = Split-Path -Parent $PSScriptRoot
@@ -112,5 +123,7 @@ try {
     Write-Output $target
     exit 0
 } catch {
+    # Never leave an unverified download behind.
+    if ($tmp) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp }
     Fail $_.Exception.Message
 }

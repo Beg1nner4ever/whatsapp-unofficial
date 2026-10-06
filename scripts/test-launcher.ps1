@@ -25,8 +25,12 @@ function New-Plugin([string]$Name, [string]$Checksum) {
 function Invoke-Launcher([string]$Root, [string]$Data, [string[]]$LauncherArgs) {
     $env:CLAUDE_PLUGIN_DATA = $Data
     $env:WHATSAPP_UNOFFICIAL_DOWNLOAD_BASE = "file:///" + ($releases -replace '\\', '/')
-    $out = & cmd.exe /d /c (Join-Path $Root 'scripts\launch.cmd') @LauncherArgs 2>$null
-    return @{ Code = $LASTEXITCODE; Out = ($out -join "`n") }
+    $errFile = Join-Path $work ([Guid]::NewGuid().ToString('N') + '.stderr')
+    $out = & cmd.exe /d /c (Join-Path $Root 'scripts\launch.cmd') @LauncherArgs 2>$errFile
+    $code = $LASTEXITCODE
+    # Show launcher diagnostics so CI failures are debuggable.
+    if (Test-Path $errFile) { Get-Content $errFile | ForEach-Object { Write-Host "   # $_" } }
+    return @{ Code = $code; Out = ($out -join "`n") }
 }
 
 try {
