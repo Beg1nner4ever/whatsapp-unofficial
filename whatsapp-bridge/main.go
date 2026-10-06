@@ -855,7 +855,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 	if jid.Server == "g.us" {
 		// This is a group chat
-		logger.Infof("Getting name for group: %s", chatJID)
+		logger.Debugf("Getting name for group %s", chatJID)
 
 		// Use conversation data if provided (from history sync)
 		if conversation != nil {
@@ -902,7 +902,7 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		logger.Debugf("Resolved group name for %s", chatJID)
 	} else {
 		// This is an individual contact
-		logger.Infof("Getting name for contact: %s", chatJID)
+		logger.Debugf("Getting name for contact %s", chatJID)
 
 		// Just use contact info (full name)
 		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
