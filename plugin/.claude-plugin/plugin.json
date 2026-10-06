@@ -7,6 +7,10 @@
   },
   "homepage": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
   "repository": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+  "documentationUrl": "https://github.com/Beg1nner4ever/whatsapp-unofficial/blob/main/docs/INSTALL.md",
+  "privacyPolicyUrl": "https://github.com/Beg1nner4ever/whatsapp-unofficial/blob/main/docs/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/Beg1nner4ever/whatsapp-unofficial/blob/main/docs/TERMS.md",
+  "supportUrl": "https://github.com/Beg1nner4ever/whatsapp-unofficial/issues",
   "license": "MIT",
   "keywords": [
     "whatsapp",
@@ -28,7 +32,9 @@
   "mcpServers": {
     "whatsapp-unofficial": {
       "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch",
-      "args": ["serve"],
+      "args": [
+        "serve"
+      ],
       "env": {
         "WHATSAPP_UNOFFICIAL_ALLOW_SEND": "${user_config.allow_send}"
       }

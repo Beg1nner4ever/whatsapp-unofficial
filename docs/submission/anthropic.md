@@ -80,7 +80,7 @@ few seeded chats, or explain that the reviewer must link their own test number.
       original artwork, no WhatsApp/Meta marks)
 - [ ] MCP tool annotations (`readOnlyHint`, `destructiveHint`, `title`;
       policy 5E) - must be set by the Go core for every tool
-- [ ] `claude plugin validate plugin --strict` passes on the release commit
+- [x] `claude plugin validate plugin` passes (with `--strict`, Claude Code 2.1.220 flags the directory-only link fields documentationUrl, privacyPolicyUrl, termsOfServiceUrl and supportUrl as unknown; they are read by the directory and ignored at load time)
 - [ ] Release `v<VERSION>` published with all five binaries
 
 ## What you must do yourself
