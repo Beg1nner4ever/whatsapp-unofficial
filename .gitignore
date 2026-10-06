@@ -4,3 +4,10 @@ whatsapp.log
 # Session keys, messages, token, outbox and downloaded media
 whatsapp-bridge/store/
 bridge_token
+
+# Release build output
+dist/
+# Never commit WhatsApp data
+*.db
+*.db-wal
+*.db-shm

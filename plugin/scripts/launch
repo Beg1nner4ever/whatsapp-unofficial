@@ -1,0 +1,159 @@
+#!/bin/sh
+# Launcher for the whatsapp-unofficial binary (Claude Code and Codex plugins).
+#
+# Resolves the release binary for this OS/arch, downloads it on first use,
+# verifies its SHA-256 against ../checksums.txt BEFORE it is made executable,
+# moves it into the cache with an atomic rename, then execs it with all args.
+#
+# This script typically runs as an MCP stdio server command: it must never
+# write anything to stdout. All diagnostics go to stderr.
+#
+# Environment:
+#   WHATSAPP_UNOFFICIAL_BIN            run this binary instead (no download)
+#   WHATSAPP_UNOFFICIAL_DOWNLOAD_BASE  override release download base URL
+#                                      (https:// only; file:// for tests)
+#   CLAUDE_PLUGIN_DATA / PLUGIN_DATA   cache root (else ~/.cache/whatsapp-unofficial)
+
+set -eu
+
+# GitHub repository that publishes the release assets.
+REPO_SLUG="Beg1nner4ever/whatsapp-unofficial"
+NAME="whatsapp-unofficial"
+
+die() {
+	printf '%s launcher: error: %s\n' "$NAME" "$*" >&2
+	exit 1
+}
+
+note() {
+	printf '%s launcher: %s\n' "$NAME" "$*" >&2
+}
+
+if [ -n "${WHATSAPP_UNOFFICIAL_BIN:-}" ]; then
+	exec "$WHATSAPP_UNOFFICIAL_BIN" "$@"
+fi
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P) ||
+	die "cannot resolve launcher directory"
+plugin_root=$(dirname -- "$script_dir")
+
+# --- version -----------------------------------------------------------------
+[ -r "$plugin_root/VERSION" ] || die "missing $plugin_root/VERSION"
+version=$(tr -d ' \t\r\n' <"$plugin_root/VERSION")
+case $version in
+'' | *[!0-9A-Za-z.+-]*) die "invalid version '$version' in $plugin_root/VERSION" ;;
+esac
+
+# --- platform ----------------------------------------------------------------
+os_raw=$(uname -s 2>/dev/null || echo unknown)
+arch_raw=$(uname -m 2>/dev/null || echo unknown)
+case $os_raw in
+Darwin) os=darwin ;;
+Linux) os=linux ;;
+*) os="" ;;
+esac
+case $arch_raw in
+x86_64 | amd64) arch=amd64 ;;
+arm64 | aarch64) arch=arm64 ;;
+*) arch="" ;;
+esac
+# A shell running under Rosetta reports x86_64; prefer the native build.
+if [ "$os" = darwin ] && [ "$arch" = amd64 ] &&
+	[ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ]; then
+	arch=arm64
+fi
+if [ -z "$os" ] || [ -z "$arch" ]; then
+	die "unsupported platform: $os_raw/$arch_raw. Supported: macOS (arm64, x86_64), Linux (x86_64, arm64), Windows (x86_64). Build from source and set WHATSAPP_UNOFFICIAL_BIN to the binary path."
+fi
+asset="${NAME}_${os}_${arch}"
+
+# --- expected checksum -------------------------------------------------------
+checksums="$plugin_root/checksums.txt"
+[ -r "$checksums" ] || die "missing $checksums"
+expected=$(awk -v a="$asset" '$2 == a || $2 == ("*" a) { print tolower($1); exit }' "$checksums")
+case $expected in
+'') die "no checksum for $asset in $checksums; this plugin build is incomplete" ;;
+*[!0-9a-f]*) die "malformed checksum for $asset in $checksums" ;;
+esac
+[ ${#expected} -eq 64 ] || die "malformed checksum for $asset in $checksums"
+
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{ print tolower($1) }'
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{ print tolower($1) }'
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 -r "$1" | awk '{ print tolower($1) }'
+	else
+		die "no SHA-256 tool found (need sha256sum, shasum or openssl)"
+	fi
+}
+
+# --- cache -------------------------------------------------------------------
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+	data_root=$CLAUDE_PLUGIN_DATA
+elif [ -n "${PLUGIN_DATA:-}" ]; then
+	data_root=$PLUGIN_DATA
+else
+	[ -n "${HOME:-}" ] || die "HOME is not set; set CLAUDE_PLUGIN_DATA or PLUGIN_DATA"
+	data_root="$HOME/.cache/$NAME"
+fi
+cache_dir="$data_root/bin/$version"
+target="$cache_dir/$asset"
+
+# Re-verify a cached binary on every start; a damaged file is replaced.
+if [ -f "$target" ]; then
+	if [ "$(sha256_of "$target")" = "$expected" ] && [ -x "$target" ]; then
+		exec "$target" "$@"
+	fi
+	note "cached binary failed verification; downloading again"
+	rm -f "$target" || die "cannot remove invalid cached binary $target"
+fi
+
+# --- download ----------------------------------------------------------------
+base=${WHATSAPP_UNOFFICIAL_DOWNLOAD_BASE:-"https://github.com/$REPO_SLUG/releases/download/v$version"}
+base=${base%/}
+case $base in
+https://* | file://*) ;;
+*) die "refusing download base '$base': only https:// URLs are allowed" ;;
+esac
+url="$base/$asset"
+
+umask 077
+mkdir -p "$cache_dir" || die "cannot create cache directory $cache_dir"
+
+# Each run downloads to its own temp file, so concurrent first runs never
+# share a partial file; the final rename is atomic and both sides install
+# byte-identical verified content.
+tmp=$(mktemp "$cache_dir/.$asset.XXXXXX") || die "cannot create temp file in $cache_dir"
+trap 'rm -f "$tmp"' EXIT
+trap 'exit 130' INT HUP TERM
+
+note "downloading $asset v$version from $url"
+case $url in
+file://*)
+	src=${url#file://}
+	cp "$src" "$tmp" 2>/dev/null || die "download failed: $url"
+	;;
+*)
+	if command -v curl >/dev/null 2>&1; then
+		curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+			--retry 3 --connect-timeout 20 -o "$tmp" "$url" >&2 ||
+			die "download failed: $url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q -O "$tmp" "$url" >&2 || die "download failed: $url"
+	else
+		die "need curl or wget to download $url"
+	fi
+	;;
+esac
+
+actual=$(sha256_of "$tmp")
+if [ "$actual" != "$expected" ]; then
+	die "checksum mismatch for $asset (expected $expected, got $actual); refusing to run it"
+fi
+
+chmod 0700 "$tmp" || die "cannot mark $tmp executable"
+mv -f "$tmp" "$target" || die "cannot move binary into $target"
+trap - EXIT INT HUP TERM
+exec "$target" "$@"

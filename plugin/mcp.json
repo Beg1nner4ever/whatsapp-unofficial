@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "whatsapp-unofficial": {
+      "type": "stdio",
+      "command": "./scripts/launch",
+      "args": ["serve"],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

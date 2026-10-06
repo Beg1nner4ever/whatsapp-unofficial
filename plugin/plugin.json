@@ -1,0 +1,52 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "whatsapp-unofficial",
+  "version": "0.1.0",
+  "description": "Unofficial, community-built WhatsApp integration: read your own WhatsApp chats from your AI assistant via a local linked device. Read-only by default; sending is opt-in. Not affiliated with, endorsed by, or sponsored by WhatsApp or Meta.",
+  "homepage": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+  "repository": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+  "license": "MIT",
+  "author": {
+    "name": "Beg1nner4ever",
+    "url": "https://github.com/Beg1nner4ever"
+  },
+  "keywords": [
+    "whatsapp",
+    "unofficial",
+    "messaging",
+    "chat",
+    "mcp",
+    "local",
+    "read-only"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "WhatsApp (Unofficial)",
+        "shortDescription": "Unofficial WhatsApp reader",
+        "longDescription": "An unofficial, community-built, open-source integration that lets Codex read your own WhatsApp chats. It is not affiliated with, endorsed by, or sponsored by WhatsApp or Meta.\n\nThe plugin links a local program to your account as a WhatsApp linked device (like WhatsApp Web) and keeps everything on your computer: no servers, no telemetry. Codex can list chats, search contacts, read messages with surrounding context and download media.\n\nSafety: read-only by default; sending must be enabled explicitly. Incoming message text is quoted and treated as untrusted data. Data files are owner-only and the control channel is a local socket. Files can only be sent from a dedicated outbox folder.\n\nRisk: unofficial clients may violate WhatsApp's Terms of Service and WhatsApp may restrict or ban your account. Use at your own risk.",
+        "developerName": "Beg1nner4ever (community project)",
+        "category": "Productivity",
+        "capabilities": [
+          "Read WhatsApp chats and messages",
+          "Search contacts",
+          "Download media",
+          "Send messages (opt-in, off by default)"
+        ],
+        "websiteURL": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+        "supportURL": "https://github.com/Beg1nner4ever/whatsapp-unofficial/issues",
+        "privacyPolicyURL": "https://github.com/Beg1nner4ever/whatsapp-unofficial/blob/main/docs/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/Beg1nner4ever/whatsapp-unofficial/blob/main/docs/TERMS.md",
+        "defaultPrompt": [
+          "Link my WhatsApp account so you can read my chats",
+          "Summarize my unread WhatsApp messages from today",
+          "What did Alex and I last talk about on WhatsApp?"
+        ],
+        "brandColor": "#4655C8",
+        "brandColorDark": "#7F8BE6",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      }
+    }
+  }
+}

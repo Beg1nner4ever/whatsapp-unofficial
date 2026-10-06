@@ -1,0 +1,37 @@
+{
+  "name": "whatsapp-unofficial",
+  "version": "0.1.0",
+  "description": "Unofficial, community-built WhatsApp integration: read your own WhatsApp chats from Claude Code via a local linked device. Read-only by default; sending is opt-in. Not affiliated with, endorsed by, or sponsored by WhatsApp or Meta.",
+  "author": {
+    "name": "Beg1nner4ever"
+  },
+  "homepage": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+  "repository": "https://github.com/Beg1nner4ever/whatsapp-unofficial",
+  "license": "MIT",
+  "keywords": [
+    "whatsapp",
+    "unofficial",
+    "messaging",
+    "chat",
+    "mcp",
+    "local",
+    "read-only"
+  ],
+  "userConfig": {
+    "allow_send": {
+      "type": "boolean",
+      "title": "Allow sending messages",
+      "description": "Off by default. When on, Claude gets send_message, send_file and send_audio_message tools that send real WhatsApp messages from your account to your contacts. Messages cannot be unsent by the plugin, automated sending may get your number banned by WhatsApp, and a malicious incoming message could try to trick Claude into sending. Only enable this if you need it, and review every send.",
+      "default": false
+    }
+  },
+  "mcpServers": {
+    "whatsapp-unofficial": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch",
+      "args": ["serve"],
+      "env": {
+        "WHATSAPP_UNOFFICIAL_ALLOW_SEND": "${user_config.allow_send}"
+      }
+    }
+  }
+}

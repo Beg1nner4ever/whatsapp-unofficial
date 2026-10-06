@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go vet, test, cross-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Cross-build all release targets (CGO disabled)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+            echo "building $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null ./cmd/whatsapp-unofficial
+          done
+
+  launcher:
+    name: Launcher and manifests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck plugin/scripts/launch scripts/*.sh
+      - run: scripts/test-launcher.sh
+      - name: Launcher under dash
+        if: runner.os == 'Linux'
+        run: LAUNCHER_SHELL=/bin/dash scripts/test-launcher.sh
+      - run: scripts/check-manifests.sh
+
+  launcher-windows:
+    name: Launcher (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: pwsh -NoProfile -File scripts/test-launcher.ps1
+
+  reproducible:
+    name: Release hashes match plugin/checksums.txt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide whether release inputs changed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -eu
+          if [ "$REF_TYPE" = tag ]; then
+            echo "verify=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$EVENT_NAME" = pull_request ]; then
+            range="origin/$BASE_REF...HEAD"
+          elif [ -n "$BEFORE_SHA" ] && git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
+            range="$BEFORE_SHA..HEAD"
+          else
+            range="HEAD~1..HEAD"
+          fi
+          if git diff --name-only "$range" | grep -qxE 'plugin/VERSION|plugin/checksums.txt|scripts/build-release.sh'; then
+            echo "verify=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "verify=false" >>"$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.changes.outputs.verify == 'true'
+        with:
+          go-version-file: go.mod
+      - if: steps.changes.outputs.verify == 'true'
+        run: scripts/build-release.sh --verify

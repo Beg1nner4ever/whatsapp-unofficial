@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-unofficial",
+  "owner": {
+    "name": "Beg1nner4ever",
+    "url": "https://github.com/Beg1nner4ever"
+  },
+  "metadata": {
+    "description": "Unofficial, community-built WhatsApp plugin for Claude Code. Not affiliated with WhatsApp or Meta."
+  },
+  "plugins": [
+    {
+      "name": "whatsapp-unofficial",
+      "source": "./plugin",
+      "description": "Unofficial WhatsApp integration: read your own chats via a local linked device. Read-only by default; sending is opt-in. Not affiliated with WhatsApp or Meta.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}
