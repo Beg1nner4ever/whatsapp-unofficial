@@ -1,14 +1,103 @@
 import sqlite3
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, List, Tuple
+import os
 import os.path
+import re
 import requests
 import json
 import audio
 
-MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
-WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
+# Configuration is environment-driven so installers can point the server at
+# any bridge store. WHATSAPP_STORE_DIR must match the bridge's store directory.
+_SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
+STORE_DIR = os.path.abspath(
+    os.environ.get("WHATSAPP_STORE_DIR")
+    or os.path.join(_SERVER_DIR, "..", "whatsapp-bridge", "store")
+)
+MESSAGES_DB_PATH = os.path.join(STORE_DIR, "messages.db")
+OUTBOX_DIR = os.path.join(STORE_DIR, "outbox")
+TOKEN_PATH = os.path.join(STORE_DIR, "bridge_token")
+WHATSAPP_API_BASE_URL = os.environ.get("WHATSAPP_BRIDGE_URL", "http://127.0.0.1:8080/api")
+REQUEST_TIMEOUT_SECONDS = 120
+
+MAX_LIMIT = 100
+MAX_CONTEXT = 20
+
+# Ignore HTTP(S)_PROXY settings: the bearer token must never be sent to a proxy.
+_http = requests.Session()
+_http.trust_env = False
+
+
+def _connect() -> sqlite3.Connection:
+    """Open the message database read-only; the MCP server never writes to it."""
+    return sqlite3.connect(Path(MESSAGES_DB_PATH).as_uri() + "?mode=ro", uri=True)
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(int(value), high))
+
+
+def _quote(text: Optional[str]) -> str:
+    """JSON-quote untrusted text so a message can't fake extra lines/messages."""
+    return json.dumps(text if text is not None else "", ensure_ascii=False)
+
+
+def _bridge_token() -> str:
+    token = os.environ.get("WHATSAPP_BRIDGE_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        with open(TOKEN_PATH, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"Bridge token not found at {TOKEN_PATH}. Start the WhatsApp bridge first "
+            "(it creates the token), or set WHATSAPP_BRIDGE_TOKEN."
+        )
+
+
+def _bridge_post(endpoint: str, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    """POST to the authenticated bridge API. Returns (status, json-or-error dict)."""
+    response = _http.post(
+        f"{WHATSAPP_API_BASE_URL}/{endpoint}",
+        json=payload,
+        headers={"Authorization": f"Bearer {_bridge_token()}"},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"success": False, "message": response.text.strip()}
+    return response.status_code, body
+
+
+def resolve_outbox_path(media_path: str) -> str:
+    """Return the real path of a regular file inside the outbox, or raise ValueError.
+
+    Mirrors the bridge's check so the caller gets a clear error before upload.
+    Relative paths are resolved against the outbox; symlinks are resolved
+    before the containment check.
+    """
+    if not media_path:
+        raise ValueError("Media path must be provided")
+    candidate = media_path if os.path.isabs(media_path) else os.path.join(OUTBOX_DIR, media_path)
+    real = os.path.realpath(candidate)
+    outbox = os.path.realpath(OUTBOX_DIR)
+    if os.path.commonpath([outbox, real]) != outbox:
+        raise ValueError(
+            f"Files can only be sent from the outbox directory: {OUTBOX_DIR}. "
+            "Copy the file there first."
+        )
+    if not os.path.isfile(real):
+        raise ValueError(f"Media file not found: {media_path}")
+    return real
+
+
+def _normalize_phone(number: str) -> str:
+    return re.sub(r"\D", "", number or "")
 
 @dataclass
 class Message:
@@ -49,35 +138,26 @@ class MessageContext:
 
 def get_sender_name(sender_jid: str) -> str:
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
-        
-        # First try matching by exact JID
-        cursor.execute("""
-            SELECT name
-            FROM chats
-            WHERE jid = ?
-            LIMIT 1
-        """, (sender_jid,))
-        
-        result = cursor.fetchone()
-        
-        # If no result, try looking for the number within JIDs
-        if not result:
-            # Extract the phone number part if it's a JID
-            if '@' in sender_jid:
-                phone_part = sender_jid.split('@')[0]
-            else:
-                phone_part = sender_jid
-                
+
+        # Exact matches only: a substring match can attribute a message to the
+        # wrong contact (e.g. "3361" matching "33612345678").
+        candidates = [sender_jid]
+        if '@' not in sender_jid:
+            candidates.append(f"{sender_jid}@s.whatsapp.net")
+
+        result = None
+        for jid in candidates:
             cursor.execute("""
                 SELECT name
                 FROM chats
-                WHERE jid LIKE ?
+                WHERE jid = ?
                 LIMIT 1
-            """, (f"%{phone_part}%",))
-            
+            """, (jid,))
             result = cursor.fetchone()
+            if result:
+                break
         
         if result and result[0]:
             return result[0]
@@ -91,27 +171,30 @@ def get_sender_name(sender_jid: str) -> str:
         if 'conn' in locals():
             conn.close()
 
-def format_message(message: Message, show_chat_info: bool = True) -> None:
-    """Print a single message with consistent formatting."""
-    output = ""
-    
+def format_message(message: Message, show_chat_info: bool = True) -> str:
+    """Format a single message as one line.
+
+    Chat names, sender names and message text are untrusted (anyone can message
+    you or name a group), so they are JSON-quoted: embedded newlines or fake
+    "[timestamp] From: ..." text cannot impersonate other lines.
+    """
+    output = f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] "
+
     if show_chat_info and message.chat_name:
-        output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] Chat: {message.chat_name} "
-    else:
-        output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] "
-        
+        output += f"Chat: {_quote(message.chat_name)} "
+
     content_prefix = ""
     if hasattr(message, 'media_type') and message.media_type:
-        content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
-    
+        content_prefix = f"[{message.media_type} - Message ID: {_quote(message.id)} - Chat JID: {_quote(message.chat_jid)}] "
+
     try:
-        sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
-        output += f"From: {sender_name}: {content_prefix}{message.content}\n"
+        sender = "me" if message.is_from_me else _quote(get_sender_name(message.sender))
+        output += f"From: {sender}: {content_prefix}{_quote(message.content)}\n"
     except Exception as e:
         print(f"Error formatting message: {e}")
     return output
 
-def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> None:
+def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> str:
     output = ""
     if not messages:
         output += "No messages to display."
@@ -134,8 +217,12 @@ def list_messages(
     context_after: int = 1
 ) -> List[Message]:
     """Get messages matching the specified criteria with optional context."""
+    limit = _clamp(limit, 1, MAX_LIMIT)
+    page = max(0, int(page))
+    context_before = _clamp(context_before, 0, MAX_CONTEXT)
+    context_after = _clamp(context_after, 0, MAX_CONTEXT)
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         # Build base query
@@ -229,8 +316,10 @@ def get_message_context(
     after: int = 5
 ) -> MessageContext:
     """Get context around a specific message."""
+    before = _clamp(before, 0, MAX_CONTEXT)
+    after = _clamp(after, 0, MAX_CONTEXT)
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         # Get the target message first
@@ -324,8 +413,10 @@ def list_chats(
     sort_by: str = "last_active"
 ) -> List[Chat]:
     """Get chats matching the specified criteria."""
+    limit = _clamp(limit, 1, MAX_LIMIT)
+    page = max(0, int(page))
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         # Build base query
@@ -393,7 +484,7 @@ def list_chats(
 def search_contacts(query: str) -> List[Contact]:
     """Search contacts by name or phone number."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         # Split query into characters to support partial matching
@@ -440,8 +531,10 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         limit: Maximum number of chats to return (default 20)
         page: Page number for pagination (default 0)
     """
+    limit = _clamp(limit, 1, MAX_LIMIT)
+    page = max(0, int(page))
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -486,7 +579,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
 def get_last_interaction(jid: str) -> str:
     """Get most recent message involving the contact."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -535,7 +628,7 @@ def get_last_interaction(jid: str) -> str:
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]:
     """Get chat metadata by JID."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         query = """
@@ -583,7 +676,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
 def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
     """Get chat metadata by sender phone number."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -597,9 +690,9 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
             FROM chats c
             LEFT JOIN messages m ON c.jid = m.chat_jid 
                 AND c.last_message_time = m.timestamp
-            WHERE c.jid LIKE ? AND c.jid NOT LIKE '%@g.us'
+            WHERE c.jid = ?
             LIMIT 1
-        """, (f"%{sender_phone_number}%",))
+        """, (f"{_normalize_phone(sender_phone_number)}@s.whatsapp.net",))
         
         chat_data = cursor.fetchone()
         
@@ -622,146 +715,79 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         if 'conn' in locals():
             conn.close()
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+def _send(payload: Dict[str, Any]) -> Tuple[bool, str]:
     try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "message": message,
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
+        status, body = _bridge_post("send", payload)
+        if status == 200:
+            return body.get("success", False), body.get("message", "Unknown response")
+        return False, f"Error: HTTP {status} - {body.get('message', '')}"
     except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
+        return False, f"Request error (is the bridge running?): {e}"
     except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+        return False, f"Unexpected error: {e}"
+
+
+def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+    if not recipient:
+        return False, "Recipient must be provided"
+    return _send({"recipient": recipient, "message": message})
+
 
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
+    if not recipient:
+        return False, "Recipient must be provided"
     try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        if not media_path:
-            return False, "Media path must be provided"
-        
-        if not os.path.isfile(media_path):
-            return False, f"Media file not found: {media_path}"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "media_path": media_path
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
-    except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
-    except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+        real_path = resolve_outbox_path(media_path)
+    except ValueError as e:
+        return False, str(e)
+    return _send({"recipient": recipient, "media_path": real_path})
+
 
 def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
+    if not recipient:
+        return False, "Recipient must be provided"
     try:
-        # Validate input
-        if not recipient:
-            return False, "Recipient must be provided"
-        
-        if not media_path:
-            return False, "Media path must be provided"
-        
-        if not os.path.isfile(media_path):
-            return False, f"Media file not found: {media_path}"
+        real_path = resolve_outbox_path(media_path)
+    except ValueError as e:
+        return False, str(e)
 
-        if not media_path.endswith(".ogg"):
-            try:
-                media_path = audio.convert_to_opus_ogg_temp(media_path)
-            except Exception as e:
-                return False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}"
-        
-        url = f"{WHATSAPP_API_BASE_URL}/send"
-        payload = {
-            "recipient": recipient,
-            "media_path": media_path
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("success", False), result.get("message", "Unknown response")
-        else:
-            return False, f"Error: HTTP {response.status_code} - {response.text}"
-            
-    except requests.RequestException as e:
-        return False, f"Request error: {str(e)}"
-    except json.JSONDecodeError:
-        return False, f"Error parsing response: {response.text}"
+    if real_path.endswith(".ogg"):
+        return _send({"recipient": recipient, "media_path": real_path})
+
+    # Convert inside the outbox (the only place the bridge sends from) and
+    # remove the temporary file afterwards.
+    try:
+        converted = audio.convert_to_opus_ogg_temp(real_path, temp_dir=OUTBOX_DIR)
     except Exception as e:
-        return False, f"Unexpected error: {str(e)}"
+        return False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {e}"
+    try:
+        return _send({"recipient": recipient, "media_path": converted})
+    finally:
+        try:
+            os.unlink(converted)
+        except OSError:
+            pass
+
 
 def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     """Download media from a message and return the local file path.
-    
+
     Args:
         message_id: The ID of the message containing the media
         chat_jid: The JID of the chat containing the message
-    
+
     Returns:
         The local file path if download was successful, None otherwise
     """
     try:
-        url = f"{WHATSAPP_API_BASE_URL}/download"
-        payload = {
-            "message_id": message_id,
-            "chat_jid": chat_jid
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success", False):
-                path = result.get("path")
-                print(f"Media downloaded successfully: {path}")
-                return path
-            else:
-                print(f"Download failed: {result.get('message', 'Unknown error')}")
-                return None
-        else:
-            print(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-            
-    except requests.RequestException as e:
-        print(f"Request error: {str(e)}")
+        status, body = _bridge_post("download", {"message_id": message_id, "chat_jid": chat_jid})
+        if status == 200 and body.get("success", False):
+            return body.get("path")
+        print(f"Download failed: HTTP {status} - {body.get('message', 'Unknown error')}")
         return None
-    except json.JSONDecodeError:
-        print(f"Error parsing response: {response.text}")
+    except requests.RequestException as e:
+        print(f"Request error (is the bridge running?): {e}")
         return None
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+        print(f"Unexpected error: {e}")
         return None
